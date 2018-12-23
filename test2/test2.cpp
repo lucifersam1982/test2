@@ -1,4 +1,7 @@
 #include <type_traits>
+#include <utility>
+#include <string_view>
+
 #include <iostream>
 
 //////////////////////////////////////////////////////////
@@ -8,6 +11,11 @@ using int_sequence = std::integer_sequence<int, V...>;
 
 template<int Size>
 using make_int_sequence = std::make_integer_sequence<int, Size>;
+
+//////////////////////////////////////////////////////////
+
+template<int V>
+using int_constant = std::integral_constant<int, V>;
 
 //////////////////////////////////////////////////////////
 
@@ -144,26 +152,6 @@ struct add_value_sets<T, Set>
     using type = Set;
 };
 
-template<typename T>
-struct add_value_sets<T>
-{
-    using type = value_set<T>;
-};
-
-//////////////////////////////////////////////////////////
-
-template<typename Set, int Max = -1>
-constexpr int max_value = -1;
-
-template<int First, int... Rest, int Max>
-constexpr int max_value<int_set<First, Rest...>, Max> = 
-    First > Max ? 
-    max_value<int_set<Rest...>, First> : 
-    max_value<int_set<Rest...>, Max>;
-
-template<int Max>
-constexpr int max_value<int_set<>, Max> = Max;
-
 //////////////////////////////////////////////////////////
 
 template<typename... Sets>
@@ -171,8 +159,73 @@ using add_int_sets_t = typename add_value_sets<int, Sets...>::type;
 
 //////////////////////////////////////////////////////////
 
+template<typename T, int I, T V>
+struct contains_at : contains<T, V>
+{};
+
+//////////////////////////////////////////////////////////
+
+template<typename T, typename Seq, T... V>
+struct ordered_value_set_impl
+{};
+
+template<typename T, int... I, T... V>
+struct ordered_value_set_impl<T, int_sequence<I...>, V...> : contains_at<T, I, V>...
+{};
+
+template<typename T, T... V>
+struct ordered_value_set : ordered_value_set_impl<T, make_int_sequence<sizeof...(V)>, V...>
+{};
+
+//////////////////////////////////////////////////////////
+
+template<typename Set, int At>
+struct get_at_idx
+{
+    template<typename T, T V>
+    static int_constant<V> foo(contains_at<T, At, V>*);
+    static int_constant<-1> foo(...);
+
+    static const auto value = decltype(foo(std::declval<Set*>()))::value;
+};
+
+//////////////////////////////////////////////////////////
+
+template<typename T, T... Vs, T V>
+struct insert_to_value_set<ordered_value_set<T, Vs...>, T, V>
+{
+    static ordered_value_set<T, Vs...> foo(contains<T, V>*);
+    static ordered_value_set<T, Vs..., V> foo(...);
+
+    using type = decltype(foo(std::declval<ordered_value_set<T, Vs...>*>()));
+};
+
+//////////////////////////////////////////////////////////
+
+template<typename T, typename Set, T... V, typename... Rest>
+struct add_value_sets<T, Set, ordered_value_set<T, V...>, Rest...>
+{
+    using type = add_value_sets_t<
+        T,
+        insert_range_to_value_set_t<Set, T, V...>,
+        Rest...
+    >;
+};
+
+//////////////////////////////////////////////////////////
+
+template<int...V>
+using ordered_int_set = ordered_value_set<int, V...>;
+
+//////////////////////////////////////////////////////////
+
+struct terminal
+{};
+
+//////////////////////////////////////////////////////////
+
 template<char C>
-struct char_terminal
+struct char_terminal : terminal
 {
     static const char* debug_name()
     {
@@ -183,7 +236,7 @@ struct char_terminal
 
 //////////////////////////////////////////////////////////
 
-struct end_of_input
+struct end_of_input : terminal
 {};
 
 //////////////////////////////////////////////////////////
@@ -194,6 +247,16 @@ struct def
 
 template<int V>
 using def_t = typename def<V>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename T>
+constexpr bool is_terminal = std::is_base_of_v<terminal, T>;
+
+//////////////////////////////////////////////////////////
+
+template<typename T>
+constexpr bool is_nonterminal = !is_terminal<T>;
 
 //////////////////////////////////////////////////////////
 
@@ -209,42 +272,47 @@ struct alt
 
 //////////////////////////////////////////////////////////
 
-template<int V, typename Break, typename Enable>
+template<int V, typename Break, typename Enable = void>
 struct nullable;
 
 //////////////////////////////////////////////////////////
 
-template<typename T, typename Break>
+template<typename T, typename Break, typename Enable = void>
 struct nullable_def
 {};
 
-template<char C, typename Break>
-struct nullable_def<char_terminal<C>, Break>
+template<typename T, typename Break>
+struct nullable_def<T, Break, std::enable_if_t<is_terminal<T>>>
 {
     static const bool value = false;
 };
 
-template<typename... Seq, typename Break>
-struct nullable_def<alt<Seq...>, Break>
+template<typename... Seq, typename Break, typename Enable>
+struct nullable_def<alt<Seq...>, Break, Enable>
 {
     static const bool value = std::disjunction_v<nullable_def<Seq, Break>...>;
 };
 
-template<int... Seq, typename Break>
-struct nullable_def<is<Seq...>, Break>
+template<int... Seq, typename Break, typename Enable>
+struct nullable_def<is<Seq...>, Break, Enable>
 {
     static const bool value = std::conjunction_v<nullable<Seq, Break>...>;
 };
 
-template<typename Break>
-struct nullable_def<is<>, Break>
+template<typename Break, typename Enable>
+struct nullable_def<is<>, Break, Enable>
 {
     static const bool value = true;
 };
 
 //////////////////////////////////////////////////////////
 
-template<int V, typename Break = int_set<>, typename Enable = void>
+template<typename Seq>
+constexpr bool nullable_sequence = nullable_def<Seq, int_set<>>::value;
+
+//////////////////////////////////////////////////////////
+
+template<int V, typename Break = int_set<>, typename Enable>
 struct nullable
 {
     static const bool value = false;
@@ -296,32 +364,37 @@ struct first_set_for_sequence<is<>, Break, Enable>
 
 //////////////////////////////////////////////////////////
 
-template<typename T, int V, typename Break>
+template<typename Seq>
+using first_set_for_sequence_t = typename first_set_for_sequence<Seq, int_set<>>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename T, int V, typename Break, typename Enable = void>
 struct first_set_for_def
 {};
 
-template<char C, int V, typename Break>
-struct first_set_for_def<char_terminal<C>, V, Break>
+template<typename T, int V, typename Break>
+struct first_set_for_def<T, V, Break, std::enable_if_t<is_terminal<T>>>
 {
     using type = int_set<V>;
 };
 
-template<typename... Seq, int V, typename Break>
-struct first_set_for_def<alt<Seq...>, V, Break>
+template<typename... Seq, int V, typename Break, typename Enable>
+struct first_set_for_def<alt<Seq...>, V, Break, Enable>
 {
     using type = add_int_sets_t<
         typename first_set_for_sequence<Seq, Break>::type...
     >;
 };
 
-template<int... Seq, int V, typename Break>
-struct first_set_for_def<is<Seq...>, V, Break>
+template<int... Seq, int V, typename Break, typename Enable>
+struct first_set_for_def<is<Seq...>, V, Break, Enable>
 {
     using type = typename first_set_for_sequence<is<Seq...>, Break>::type;
 };
 
-template<int V, typename Break>
-struct first_set_for_def<is<>, V, Break>
+template<int V, typename Break, typename Enable>
+struct first_set_for_def<is<>, V, Break, Enable>
 {
     using type = int_set<>;
 };
@@ -342,7 +415,7 @@ using first_set_t = typename first_set<V>::type;
 template<int V, typename Break = int_set<>, typename Enable = void>
 struct terminal_set
 {
-    using type = int_set<>;
+    using type = ordered_int_set<>;
 };
 
 //////////////////////////////////////////////////////////
@@ -362,7 +435,7 @@ struct terminal_set_for_sequence<is<Seq...>, Break>
 template<typename Break>
 struct terminal_set_for_sequence<is<>, Break>
 {
-    using type = int_set<>;
+    using type = ordered_int_set<>;
 };
 
 //////////////////////////////////////////////////////////
@@ -374,7 +447,7 @@ struct terminal_set_for_def
 template<char C, int V, typename Break>
 struct terminal_set_for_def<char_terminal<C>, V, Break>
 {
-    using type = int_set<V>;
+    using type = ordered_int_set<V>;
 };
 
 template<typename... Seq, int V, typename Break>
@@ -394,7 +467,7 @@ struct terminal_set_for_def<is<Seq...>, V, Break>
 template<int V, typename Break>
 struct terminal_set_for_def<is<>, V, Break>
 {
-    using type = int_set<>;
+    using type = ordered_int_set<>;
 };
 
 //////////////////////////////////////////////////////////
@@ -413,7 +486,7 @@ using terminal_set_t = typename terminal_set<V>::type;
 template<int V, typename Break = int_set<>, typename Enable = void>
 struct non_terminal_set
 {
-    using type = int_set<>;
+    using type = ordered_int_set<>;
 };
 
 //////////////////////////////////////////////////////////
@@ -433,7 +506,7 @@ struct non_terminal_set_for_sequence<is<Seq...>, Break>
 template<typename Break>
 struct non_terminal_set_for_sequence<is<>, Break>
 {
-    using type = int_set<>;
+    using type = ordered_int_set<>;
 };
 
 //////////////////////////////////////////////////////////
@@ -445,14 +518,14 @@ struct non_terminal_set_for_def
 template<char C, int V, typename Break>
 struct non_terminal_set_for_def<char_terminal<C>, V, Break>
 {
-    using type = int_set<>;
+    using type = ordered_int_set<>;
 };
 
 template<typename... Seq, int V, typename Break>
 struct non_terminal_set_for_def<alt<Seq...>, V, Break>
 {
     using type = add_int_sets_t<
-        int_set<V>,
+        ordered_int_set<V>,
         typename non_terminal_set_for_sequence<Seq, Break>::type...
     >;
 };
@@ -461,7 +534,7 @@ template<int... Seq, int V, typename Break>
 struct non_terminal_set_for_def<is<Seq...>, V, Break>
 {
     using type = add_int_sets_t<
-        int_set<V>,
+        ordered_int_set<V>,
         typename non_terminal_set_for_sequence<is<Seq...>, Break>::type
     >;
 };
@@ -469,7 +542,7 @@ struct non_terminal_set_for_def<is<Seq...>, V, Break>
 template<int V, typename Break>
 struct non_terminal_set_for_def<is<>, V, Break>
 {
-    using type = int_set<V>;
+    using type = ordered_int_set<V>;
 };
 
 //////////////////////////////////////////////////////////
@@ -491,7 +564,7 @@ struct situation
 
 //////////////////////////////////////////////////////////
 
-template<int V, typename S>
+template<int I, typename S>
 struct contains_situation
 {};
 
@@ -501,13 +574,27 @@ template<typename Seq, typename... S>
 struct situation_set_impl
 {};
 
-template<int... V, typename... S>
-struct situation_set_impl<int_sequence<V...>, S...> : contains_situation<V, S>...
+template<int... I, typename... S>
+struct situation_set_impl<int_sequence<I...>, S...> : contains_situation<I, S>...
 {};
 
 template<typename... S>
 struct situation_set : situation_set_impl<make_int_sequence<sizeof...(S)>, S...>
 {};
+
+//////////////////////////////////////////////////////////
+
+template<typename Set, int I>
+struct get_situation_at_idx
+{
+    template<typename S>
+    static S foo(contains_situation<I, S>*);
+    
+    using type = decltype(foo(std::declval<Set*>()));
+};
+
+template<typename Set, int I>
+using get_situation_at_idx_t = typename get_situation_at_idx<Set, I>::type;
 
 //////////////////////////////////////////////////////////
 
@@ -571,6 +658,39 @@ struct insert_situation_to_set<situation_set<S...>, situation<L, Alpha, B, Beta,
     using type = decltype(foo(std::declval<situation_set<S...>*>()));
 };
 
+template<typename Set, typename S>
+using insert_situation_to_set_t = typename insert_situation_to_set<Set, S>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename... S>
+struct situations
+{};
+
+//////////////////////////////////////////////////////////
+
+template<typename Set, typename Situations>
+struct add_situations
+{};
+
+template<typename Set, typename Situations>
+using add_situations_t = typename add_situations<Set, Situations>::type;
+
+template<typename Set, typename First, typename... Rest>
+struct add_situations<Set, situations<First, Rest...>>
+{
+    using type = add_situations_t<
+        insert_situation_to_set_t<Set, First>,
+        situations<Rest...>
+    >;
+};
+
+template<typename Set>
+struct add_situations<Set, situations<>>
+{
+    using type = Set;
+};
+
 //////////////////////////////////////////////////////////
 
 constexpr int nothing = -1;
@@ -602,7 +722,7 @@ struct def_closure
 template<int V, typename... Seq, typename TSet>
 struct def_closure<V, alt<Seq...>, TSet>
 {
-    using type = situation_set<
+    using type = situations<
         typename seq_closure<V, Seq, TSet>::type...
     >;
 };
@@ -610,7 +730,7 @@ struct def_closure<V, alt<Seq...>, TSet>
 template<int V, int... Seq, typename TSet>
 struct def_closure<V, is<Seq...>, TSet>
 {
-    using type = situation_set<
+    using type = situations<
         typename seq_closure<V, is<Seq...>, TSet>::type
     >;
 };
@@ -622,6 +742,93 @@ struct closure
 {
     using type = typename def_closure<V, def_t<V>, TSet>::type;
 };
+
+template<int V, typename TSet>
+using closure_t = typename closure<V, TSet>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename Situation, typename Enable = void>
+struct situation_closure
+{
+    using type = situations<>;
+};
+
+template<int L, typename Alpha, int B, int... Beta, typename TSet>
+struct situation_closure
+<
+    situation<L, Alpha, B, int_sequence<Beta...>, TSet>,
+    std::enable_if_t<is_nonterminal<def_t<B>>>
+>
+{
+    using beta_first = first_set_for_sequence_t<is<Beta...>>;
+    using type = closure_t<
+        B, 
+        choose_type_t<
+            nullable_sequence<is<Beta...>>,
+            add_int_sets_t<
+                beta_first, 
+                TSet
+            >,
+            beta_first
+        >
+    >;
+};
+
+template<int L, typename Alpha, typename TSet>
+struct situation_closure<situation<L, Alpha, nothing, int_sequence<>, TSet>>
+{
+    using type = situations<>;
+};
+
+template<typename Situation>
+using situation_closure_t = typename situation_closure<Situation>::type;
+
+//////////////////////////////////////////////////////////
+
+template<int I, typename Set, typename Enable = void>
+struct recursive_closure
+{
+    using new_situations = add_situations_t<
+        Set,
+        situation_closure_t<get_situation_at_idx_t<Set, I>>
+    >;
+
+    using type = typename recursive_closure<
+        I + 1,
+        new_situations
+    >::type;
+};
+
+template<int I, typename... Situations>
+struct recursive_closure<I, situation_set<Situations...>, std::enable_if_t<I == sizeof...(Situations)>>
+{
+    using type = situation_set<Situations...>;
+};
+
+template<typename Situations>
+using recursive_closure_t = typename recursive_closure<0, Situations>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename Situations>
+struct root_situations
+{};
+
+template<typename... S>
+struct root_situations<situations<S...>>
+{
+    using type = situation_set<S...>;
+};
+
+template<typename Situations>
+using root_situations_t = typename root_situations<Situations>::type;
+
+//////////////////////////////////////////////////////////
+
+template<int Nr, typename Situations>
+struct state
+{};
 
 //////////////////////////////////////////////////////////
 
@@ -677,7 +884,7 @@ struct match_function_for_terminal_set
 {};
 
 template<int... V>
-struct match_function_for_terminal_set<int_set<V...>>
+struct match_function_for_terminal_set<ordered_int_set<V...>>
 {
     static inline match_f f = match<def_t<V>..., end_of_input>;
 };
@@ -712,25 +919,6 @@ inline const char* def_debug_name(def<V>)
 
 //////////////////////////////////////////////////////////
 
-template<typename TSet>
-class nonterminal_names
-{};
-
-template<int... V>
-class nonterminal_names<int_set<V...>>
-{
-public:
-    auto operator[](int i) const
-    {
-        return _names[i];
-    }
-
-private:
-    const char* _names[sizeof...(V)] = { def_debug_name(def<V>{})... };
-};
-
-//////////////////////////////////////////////////////////
-
 constexpr int end_of_input_v = -1;
 
 template<>
@@ -744,11 +932,11 @@ struct def<end_of_input_v>
 //////////////////////////////////////////////////////////
 
 template<typename TSet>
-class terminal_names
+class debug_names
 {};
 
 template<int... V>
-class terminal_names<int_set<V...>>
+class debug_names<int_set<V...>>
 {
 public:
     auto operator[](int i) const
@@ -757,8 +945,49 @@ public:
     }
 
 private:
-    const char* _names[sizeof...(V) + 1] = { def_debug_name(def<V>{})..., def_debug_name(def<end_of_input_v>{}) };
+    const char* _names[sizeof...(V) + 1] = { def_debug_name(def<V>{})... };
 };
+
+//////////////////////////////////////////////////////////
+
+template<typename Stream, int L, int... Alpha, int B, int... Beta, int... Ts>
+void dump_situation(Stream& s, situation<L, int_sequence<Alpha...>, B, int_sequence<Beta...>, int_set<Ts...>>)
+{
+    s << def_debug_name(def<L>{}) << " -> ";
+    ((s << def_debug_name(def<Alpha>{}) << ' '), ...);
+    s << ". " << def_debug_name(def<B>{}) << ' ';
+    ((s << def_debug_name(def<Beta>{}) << ' '), ...);
+    s << "| ";
+    ((s << def_debug_name(def<Ts>{}) << ' '), ...);
+    s << std::endl;
+}
+
+template<typename Stream, int L, int... Alpha, int... Ts>
+void dump_situation(Stream& s, situation<L, int_sequence<Alpha...>, nothing, int_sequence<>, int_set<Ts...>>)
+{
+    s << def_debug_name(def<L>{}) << " -> ";
+    ((s << def_debug_name(def<Alpha>{}) << ' '), ...);
+    s << ". | ";
+    ((s << def_debug_name(def<Ts>{}) << ' '), ...);
+    s << std::endl;
+}
+
+//////////////////////////////////////////////////////////
+
+template<typename Stream, typename... S>
+void dump_situations(Stream& s, situation_set<S...>)
+{
+    (void(dump_situation(s, S{})), ...);
+}
+
+//////////////////////////////////////////////////////////
+
+template<typename Stream, typename Situations, int Nr>
+void dump_state(Stream& s, state<Nr, Situations>)
+{
+    s << "STATE " << Nr << std::endl << std::endl;
+    dump_situations(s, Situations{});
+}
 
 //////////////////////////////////////////////////////////
 
@@ -780,43 +1009,28 @@ public:
     {
         return _nt_names[t_nr];
     }
-
-    template<typename Stream, int L, int... Alpha, int B, int... Beta, int... Ts>
-    void dump_situation(Stream& s, situation<L, int_sequence<Alpha...>, B, int_sequence<Beta...>, int_set<Ts...>>) const
-    {
-        s << def_debug_name(def<L>{}) << " -> ";
-        ((s << def_debug_name(def<Alpha>{}) << ' '), ...);
-        s << ". " << def_debug_name(def<B>{}) << ' ';
-        ((s << def_debug_name(def<Beta>{}) << ' '), ...);
-        s << "| ";
-        ((s << def_debug_name(def<Ts>{}) << ' '), ...);
-        s << std::endl;
-    }
-
-    template<typename Stream, int L, int... Alpha, int... Ts>
-    void dump_situation(Stream& s, situation<L, int_sequence<Alpha...>, nothing, int_sequence<>, int_set<Ts...>>) const
-    {
-        s << def_debug_name(def<L>{}) << " -> ";
-        ((s << def_debug_name(def<Alpha>{}) << ' '), ...);
-        s << ". | ";
-        ((s << def_debug_name(def<Ts>{}) << ' '), ...);
-        s << std::endl;
-    }
-
-    template<typename Stream, typename... S>
-    void dump_situations(Stream& s, situation_set<S...>) const
-    {
-        (void(dump_situation(s, S{})), ...);
-    }
-
-    using start_closure = typename closure<S, int_set<end_of_input_v>>::type;
     
-private:
-    using t_set = terminal_set_t<S>;
-    using nt_set = nonterminal_set_t<S>;
+    template<typename Stream>
+    void dump(Stream& s)
+    {
+        dump_state(s, start_state{});
+    }
 
-    terminal_names<t_set> _t_names;
-    nonterminal_names<nt_set> _nt_names;
+private:
+    using t_set = insert_to_int_set_t<terminal_set_t<S>, end_of_input_v>;
+    using nt_set = nonterminal_set_t<S>;
+    
+    using start_state = state<
+        0,
+        recursive_closure_t<
+            root_situations_t<
+                closure_t<S, int_set<end_of_input_v>>
+            >
+        >
+    >;
+    
+    debug_names<t_set> _t_names;
+    debug_names<nt_set> _nt_names;
     match_f _match_function = match_function_for_terminal_set<t_set>::f;
 };
 
@@ -859,17 +1073,15 @@ struct def<opt>
 template<>
 struct def<ex>
 {
-    using type = alt<is<ex, plus, ex>, is<one>>;
+    using type = alt<is<ex, plus, ex>, is<ex, minus, ex>, is<one>>;
 
     static const char* debug_name() { return "ex"; }
 };
 
 int main()
 {
-    using p = parser<ex>;
-    p pp;
-
-    pp.dump_situations(std::cout, p::start_closure{});
+    parser<ex> p;
+    p.dump(std::cout);
 
     return 0;
 }
