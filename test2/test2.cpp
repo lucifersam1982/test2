@@ -19,27 +19,6 @@ using int_constant = std::integral_constant<int, V>;
 
 //////////////////////////////////////////////////////////
 
-template<bool B, typename T1, typename T2, typename Enable = void>
-struct choose_type
-{};
-
-template<bool B, typename T1, typename T2>
-struct choose_type<B, T1, T2, std::enable_if_t<B>>
-{
-    using type = T1;
-};
-
-template<bool B, typename T1, typename T2>
-struct choose_type<B, T1, T2, std::enable_if_t<!B>>
-{
-    using type = T2;
-};
-
-template<bool B, typename T1, typename T2>
-using choose_type_t = typename choose_type<B, T1, T2>::type;
-
-//////////////////////////////////////////////////////////
-
 template<typename T, T V>
 struct contains
 {};
@@ -308,7 +287,7 @@ struct nullable_def<is<>, Break, Enable>
 //////////////////////////////////////////////////////////
 
 template<typename Seq>
-constexpr bool nullable_sequence = nullable_def<Seq, int_set<>>::value;
+constexpr bool nullable_def_v = nullable_def<Seq, int_set<>>::value;
 
 //////////////////////////////////////////////////////////
 
@@ -620,7 +599,7 @@ struct update_situation_in_set_impl
 template<typename... S, int... V, int I, typename TSet>
 struct update_situation_in_set_impl<situation_set<S...>, int_sequence<V...>, I, TSet>
 {
-    using type = situation_set<choose_type_t<I == V, update_situation_t<S, TSet>, S>...>;
+    using type = situation_set<std::conditional_t<I == V, update_situation_t<S, TSet>, S>...>;
 };
 
 template<typename Set, int I, typename TSet>
@@ -764,8 +743,8 @@ struct situation_closure
     using beta_first = first_set_for_sequence_t<is<Beta...>>;
     using type = closure_t<
         B, 
-        choose_type_t<
-            nullable_sequence<is<Beta...>>,
+        std::conditional_t<
+            nullable_def_v<is<Beta...>>,
             add_int_sets_t<
                 beta_first, 
                 TSet
@@ -826,9 +805,88 @@ using root_situations_t = typename root_situations<Situations>::type;
 
 //////////////////////////////////////////////////////////
 
+template<int V, typename Seq>
+struct situation_map_element
+{};
+
+template<typename... Elements>
+struct situation_map
+{};
+
+template<int... V, typename... Seq>
+struct situation_map<situation_map_element<V, Seq>...> : situation_map_element<V, Seq>...
+{};
+
+//////////////////////////////////////////////////////////
+
+template<typename Map, typename Sequence, int V, typename NewSeq>
+struct update_situation_map_element_impl
+{};
+
+template<typename... Elements, int... I, int V, typename NewSeq>
+struct update_situation_map_element_impl<situation_map<Elements...>, int_sequence<I...>, V, NewSeq>
+{
+    using type = situation_map<
+        std::conditional_t<
+            I == V,
+            situation_map_element<V, NewSeq>,
+            Elements
+        >...
+    >;
+};
+
+template<typename Map, int V, typename NewSeq>
+struct update_situation_map_element
+{};
+
+template<typename... Elements, int V, typename NewSeq>
+struct update_situation_map_element<situation_map<Elements...>, V, NewSeq>
+{
+    using type = typename update_situation_map_element_impl<
+        situation_map<Elements...>,
+        make_int_sequence<sizeof...(Elements)>, 
+        V, 
+        NewSeq
+    >::type;
+};
+
+template<typename Map, int V, typename NewSeq>
+using update_situation_map_element_t = typename update_situation_map_element<Map, V, NewSeq>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename Map, int V, int Idx>
+struct add_to_situation_map
+{};
+
+template<typename... Elements, int V, int Idx>
+struct add_to_situation_map<situation_map<Elements...>, V, Idx>
+{
+    template<int V, int...Seq>
+    static update_situation_map_element_t<
+        situation_map<Elements...>, 
+        V, 
+        int_sequence<Seq..., Idx>
+    > foo(situation_map_element<V, int_sequence<Seq...>>*);
+    
+    static situation_map<Elements..., situation_map_element<V, int_sequence<Idx>>> foo(...);
+
+    using type = decltype(foo(std::declval<situation_map<Elements...>>()));
+};
+
+template<typename Map, int V, int Idx>
+using add_to_situation_map_t = typename add_to_situation_map<Map, V, Idx>::type;
+
+//////////////////////////////////////////////////////////
+
 template<int Nr, typename Situations>
 struct state
 {};
+
+template<int Nr, typename... Situations>
+struct state<Nr, situation_set<Situations...>>
+{
+};
 
 //////////////////////////////////////////////////////////
 
