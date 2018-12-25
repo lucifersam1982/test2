@@ -14,6 +14,27 @@ using make_int_sequence = std::make_integer_sequence<int, Size>;
 
 //////////////////////////////////////////////////////////
 
+template<typename Seq, int V>
+struct add_to_int_sequence
+{};
+
+template<int... Seq, int V>
+struct add_to_int_sequence<int_sequence<Seq...>, V>
+{
+    using type = int_sequence<Seq..., V>;
+};
+
+template<typename Seq, int V>
+using add_to_int_sequence_t = typename add_to_int_sequence<Seq, V>::type;
+
+//////////////////////////////////////////////////////////
+
+template<int I1, int I2>
+struct int_pair
+{};
+
+//////////////////////////////////////////////////////////
+
 template<int V>
 using int_constant = std::integral_constant<int, V>;
 
@@ -539,7 +560,9 @@ using nonterminal_set_t = typename non_terminal_set<V>::type;
 
 template<int L, typename Alpha, int B, typename Beta, typename TSet>
 struct situation
-{};
+{
+    static const int b = B;
+};
 
 //////////////////////////////////////////////////////////
 
@@ -809,15 +832,23 @@ template<int V, typename Seq>
 struct situation_map_element
 {};
 
+//////////////////////////////////////////////////////////
+
 template<typename... Elements>
 struct situation_map
 {};
 
-template<int... V, typename... Seq>
-struct situation_map<situation_map_element<V, Seq>...> : situation_map_element<V, Seq>...
-{};
+template<int FirstV, int... RestV, typename FirstSeq, typename... RestSeq>
+struct situation_map<
+    situation_map_element<FirstV, FirstSeq>, 
+    situation_map_element<RestV, RestSeq>...
+> : situation_map_element<FirstV, FirstSeq>, situation_map_element<RestV, RestSeq>...
+{
+    using first_element = situation_map_element<FirstV, FirstSeq>;
+};
 
 //////////////////////////////////////////////////////////
+
 
 template<typename Map, typename Sequence, int V, typename NewSeq>
 struct update_situation_map_element_impl
@@ -862,20 +893,68 @@ struct add_to_situation_map
 template<typename... Elements, int V, int Idx>
 struct add_to_situation_map<situation_map<Elements...>, V, Idx>
 {
-    template<int V, int...Seq>
+    template<typename Seq>
     static update_situation_map_element_t<
         situation_map<Elements...>, 
         V, 
-        int_sequence<Seq..., Idx>
-    > foo(situation_map_element<V, int_sequence<Seq...>>*);
+        add_to_int_sequence_t<Seq, Idx>
+    > foo(situation_map_element<V, Seq>*);
     
     static situation_map<Elements..., situation_map_element<V, int_sequence<Idx>>> foo(...);
 
-    using type = decltype(foo(std::declval<situation_map<Elements...>>()));
+    using type = decltype(foo(std::declval<situation_map<Elements...>*>()));
 };
 
 template<typename Map, int V, int Idx>
 using add_to_situation_map_t = typename add_to_situation_map<Map, V, Idx>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename Map, typename... Elements>
+struct add_range_to_situation_map
+{};
+
+template<typename Map, typename... Elements>
+using add_range_to_situation_map_t = typename add_range_to_situation_map<Map, Elements...>::type;
+
+template<typename Map, int V, int Idx, typename... Rest>
+struct add_range_to_situation_map<Map, int_pair<V, Idx>, Rest...>
+{
+    using type = add_range_to_situation_map_t<
+        add_to_situation_map_t<Map, V, Idx>,
+        Rest...
+    >;
+};
+
+template<typename Map, int Idx, typename... Rest>
+struct add_range_to_situation_map<Map, int_pair<nothing, Idx>, Rest...>
+{
+    using type = typename add_range_to_situation_map<Map, Rest...>::type;
+};
+
+template<typename Map>
+struct add_range_to_situation_map<Map>
+{
+    using type = Map;
+};
+
+//////////////////////////////////////////////////////////
+
+template<typename Situations, typename Seq>
+struct make_situation_map
+{};
+
+template<typename... Situations, int... I>
+struct make_situation_map<situation_set<Situations...>, int_sequence<I...>>
+{
+    using type = add_range_to_situation_map_t<
+        situation_map<>,
+        int_pair<Situations::b, I>...
+    >;
+};
+
+template<typename Situations, typename Seq>
+using make_situation_map_t = typename make_situation_map<Situations, Seq>::type;
 
 //////////////////////////////////////////////////////////
 
@@ -886,7 +965,63 @@ struct state
 template<int Nr, typename... Situations>
 struct state<Nr, situation_set<Situations...>>
 {
+    static const int nr = Nr;
+
+    using situations = situation_set<Situations...>;
+    
+    using map = make_situation_map_t<
+        situation_set<Situations...>,
+        make_int_sequence<sizeof...(Situations)>
+    >;
 };
+
+//////////////////////////////////////////////////////////
+
+template<typename StateSet, typename Situation>
+struct get_state_nr_with_situation
+{
+    template<int I>
+    static int_constant<I> foo(contains_situation<I, Situation>*);
+    static int_constant<-1> foo(...);
+
+    static const int value = decltype(foo(std::declval<StateSet*>()))::value;
+};
+
+template<typename StateSet, typename Situation>
+constexpr int get_state_nr_with_situation_v = get_state_nr_with_situation<StateSet, Situation>::value;
+
+//////////////////////////////////////////////////////////
+
+template<int Nr, typename Situations>
+struct contains_situations
+{};
+
+template<int Nr, typename... Situations>
+struct contains_situations<Nr, situation_set<Situations...>> : contains_situation<Nr, Situations>...
+{};
+
+//////////////////////////////////////////////////////////
+
+template<typename... States>
+struct states_set : contains_situations<States::nr, typename States::situations>
+{};
+
+//////////////////////////////////////////////////////////
+
+template<int I, typename States, typename Enable = void>
+struct recursive_transitions
+{
+    using type = typename recursive_transitions<I + 1, new_set>::type;
+};
+
+template<int I, typename... States>
+struct recursive_transitions<I, states_set<States...>, std::enable_if_t<I == sizeof...(States)>>
+{
+    using type = states_set<States...>;
+};
+
+template<typename States>
+using recursive_transitions_t = typename recursive_transitions<0, States>::type;
 
 //////////////////////////////////////////////////////////
 
@@ -1086,6 +1221,8 @@ private:
             >
         >
     >;
+
+    using states = recursive_transitions_t<states_set<start_state>>;
     
     debug_names<t_set> _t_names;
     debug_names<nt_set> _nt_names;
