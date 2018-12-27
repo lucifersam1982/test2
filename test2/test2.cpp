@@ -40,6 +40,29 @@ using int_constant = std::integral_constant<int, V>;
 
 //////////////////////////////////////////////////////////
 
+template<typename... Types>
+struct type_sequence
+{
+    static const int size = sizeof...(Types);
+};
+
+//////////////////////////////////////////////////////////
+
+template<typename Seq, typename T>
+struct add_to_type_sequence
+{};
+
+template<typename... Seq, typename T>
+struct add_to_type_sequence<type_sequence<Seq...>, T>
+{
+    using type = type_sequence<Seq..., T>;
+};
+
+template<typename Seq, typename T>
+using add_to_type_sequence_t = typename add_to_type_sequence<Seq, T>::type;
+
+//////////////////////////////////////////////////////////
+
 template<typename T, T V>
 struct contains
 {};
@@ -184,7 +207,6 @@ struct get_at_idx
 {
     template<typename T, T V>
     static int_constant<V> foo(contains_at<T, At, V>*);
-    static int_constant<-1> foo(...);
 
     static const auto value = decltype(foo(std::declval<Set*>()))::value;
 };
@@ -665,12 +687,6 @@ using insert_situation_to_set_t = typename insert_situation_to_set<Set, S>::type
 
 //////////////////////////////////////////////////////////
 
-template<typename... S>
-struct situations
-{};
-
-//////////////////////////////////////////////////////////
-
 template<typename Set, typename Situations>
 struct add_situations
 {};
@@ -679,16 +695,16 @@ template<typename Set, typename Situations>
 using add_situations_t = typename add_situations<Set, Situations>::type;
 
 template<typename Set, typename First, typename... Rest>
-struct add_situations<Set, situations<First, Rest...>>
+struct add_situations<Set, type_sequence<First, Rest...>>
 {
     using type = add_situations_t<
         insert_situation_to_set_t<Set, First>,
-        situations<Rest...>
+        type_sequence<Rest...>
     >;
 };
 
 template<typename Set>
-struct add_situations<Set, situations<>>
+struct add_situations<Set, type_sequence<>>
 {
     using type = Set;
 };
@@ -724,7 +740,7 @@ struct def_closure
 template<int V, typename... Seq, typename TSet>
 struct def_closure<V, alt<Seq...>, TSet>
 {
-    using type = situations<
+    using type = type_sequence<
         typename seq_closure<V, Seq, TSet>::type...
     >;
 };
@@ -732,7 +748,7 @@ struct def_closure<V, alt<Seq...>, TSet>
 template<int V, int... Seq, typename TSet>
 struct def_closure<V, is<Seq...>, TSet>
 {
-    using type = situations<
+    using type = type_sequence<
         typename seq_closure<V, is<Seq...>, TSet>::type
     >;
 };
@@ -753,7 +769,7 @@ using closure_t = typename closure<V, TSet>::type;
 template<typename Situation, typename Enable = void>
 struct situation_closure
 {
-    using type = situations<>;
+    using type = type_sequence<>;
 };
 
 template<int L, typename Alpha, int B, int... Beta, typename TSet>
@@ -780,7 +796,7 @@ struct situation_closure
 template<int L, typename Alpha, typename TSet>
 struct situation_closure<situation<L, Alpha, nothing, int_sequence<>, TSet>>
 {
-    using type = situations<>;
+    using type = type_sequence<>;
 };
 
 template<typename Situation>
@@ -813,24 +829,15 @@ using recursive_closure_t = typename recursive_closure<0, Situations>::type;
 
 //////////////////////////////////////////////////////////
 
-template<typename Situations>
-struct root_situations
-{};
-
-template<typename... S>
-struct root_situations<situations<S...>>
-{
-    using type = situation_set<S...>;
-};
-
-template<typename Situations>
-using root_situations_t = typename root_situations<Situations>::type;
-
-//////////////////////////////////////////////////////////
-
 template<int V, typename Seq>
 struct situation_map_element
 {};
+
+template<int V, int First, int... Rest>
+struct situation_map_element<V, int_sequence<First, Rest...>>
+{
+    static const int front = First;
+};
 
 //////////////////////////////////////////////////////////
 
@@ -838,14 +845,9 @@ template<typename... Elements>
 struct situation_map
 {};
 
-template<int FirstV, int... RestV, typename FirstSeq, typename... RestSeq>
-struct situation_map<
-    situation_map_element<FirstV, FirstSeq>, 
-    situation_map_element<RestV, RestSeq>...
-> : situation_map_element<FirstV, FirstSeq>, situation_map_element<RestV, RestSeq>...
-{
-    using first_element = situation_map_element<FirstV, FirstSeq>;
-};
+template<int... V, typename... Seq>
+struct situation_map<situation_map_element<V, Seq>...> : situation_map_element<V, Seq>...
+{};
 
 //////////////////////////////////////////////////////////
 
@@ -977,12 +979,31 @@ struct state<Nr, situation_set<Situations...>>
 
 //////////////////////////////////////////////////////////
 
+template<int Nr, typename Situations>
+struct make_state
+{};
+
+template<int Nr, typename... S>
+struct make_state<Nr, type_sequence<S...>>
+{
+    using type = state<Nr, recursive_closure_t<situation_set<S...>>>;
+};
+
+template<int Nr, typename Situations>
+using make_state_t = typename make_state<Nr, Situations>::type;
+
+//////////////////////////////////////////////////////////
+
+constexpr int no_state = -1;
+
+//////////////////////////////////////////////////////////
+
 template<typename StateSet, typename Situation>
 struct get_state_nr_with_situation
 {
     template<int I>
     static int_constant<I> foo(contains_situation<I, Situation>*);
-    static int_constant<-1> foo(...);
+    static int_constant<no_state> foo(...);
 
     static const int value = decltype(foo(std::declval<StateSet*>()))::value;
 };
@@ -1002,15 +1023,171 @@ struct contains_situations<Nr, situation_set<Situations...>> : contains_situatio
 
 //////////////////////////////////////////////////////////
 
-template<typename... States>
-struct states_set : contains_situations<States::nr, typename States::situations>
+template<int I, typename State>
+struct contains_state : contains_situations<State::nr, typename State::situations>
 {};
 
 //////////////////////////////////////////////////////////
 
-template<int I, typename States, typename Enable = void>
+template<typename Seq, typename... States>
+struct states_set_impl
+{};
+
+template<int... I, typename... States>
+struct states_set_impl<int_sequence<I...>, States...> : contains_state<I, States>...
+{};
+
+template<typename... States>
+struct states_set : states_set_impl<make_int_sequence<sizeof...(States)>, States...>
+{
+    static const int size = sizeof...(States);
+};
+
+//////////////////////////////////////////////////////////
+
+template<typename Set, int I>
+struct get_state_at_idx
+{
+    template<typename S>
+    static S foo(contains_state<I, S>*);
+
+    using type = decltype(foo(std::declval<Set*>()));
+};
+
+template<typename Set, int I>
+using get_state_at_idx_t = typename get_state_at_idx<Set, I>::type;
+
+//////////////////////////////////////////////////////////
+
+template<int V, typename Situations>
+struct new_state_transition
+{};
+
+//////////////////////////////////////////////////////////
+
+template<int V, int Nr>
+struct existing_state_transition
+{};
+
+//////////////////////////////////////////////////////////
+
+template<typename Set, typename Transitions>
+struct add_states
+{};
+
+template<typename Set, typename Transitions>
+using add_states_t = typename add_states<Set, Transitions>::type;
+
+template<typename... States, int V, typename Situations, typename... Rest>
+struct add_states<states_set<States...>, type_sequence<new_state_transition<V, Situations>, Rest...>>
+{
+    using type = add_states_t<
+        states_set<States..., make_state_t<sizeof...(States), Situations>>,
+        type_sequence<Rest...>
+    >;
+};
+
+template<typename... States, int V, int Nr, typename... Rest>
+struct add_states<states_set<States...>, type_sequence<existing_state_transition<V, Nr>, Rest...>>
+{
+    using type = add_states_t<
+        states_set<States...>,
+        type_sequence<Rest...>
+    >;
+};
+
+template<typename Set>
+struct add_states<Set, type_sequence<>>
+{
+    using type = Set;
+};
+
+//////////////////////////////////////////////////////////
+
+template<typename Situation>
+struct move_situation
+{};
+
+template<int L, int... Alpha, int B, int First, int... Rest, typename TSet>
+struct move_situation<situation<L, int_sequence<Alpha...>, B, int_sequence<First, Rest...>, TSet>>
+{
+    using type = situation<L, int_sequence<Alpha..., B>, First, int_sequence<Rest...>, TSet>;
+};
+
+template<int L, int... Alpha, int B, typename TSet>
+struct move_situation<situation<L, int_sequence<Alpha...>, B, int_sequence<>, TSet>>
+{
+    using type = situation<L, int_sequence<Alpha..., B>, nothing, int_sequence<>, TSet>;
+};
+
+template<typename Situation>
+using move_situation_t = typename move_situation<Situation>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename Element, int Nr, typename Situations>
+struct make_transition_impl
+{};
+
+template<int V, int... I, typename Situations>
+struct make_transition_impl<situation_map_element<V, int_sequence<I...>>, no_state, Situations>
+{
+    using type = new_state_transition<
+        V, 
+        type_sequence<
+            move_situation_t<get_situation_at_idx_t<Situations, I>>...
+        >
+    >;
+};
+
+template<int V, typename Seq, int Nr, typename Situations>
+struct make_transition_impl<situation_map_element<V, Seq>, Nr, Situations>
+{
+    using type = existing_state_transition<V, Nr>;
+};
+
+template<typename Element, typename Situations, typename StatesSet>
+struct make_transition
+{
+    static const int state_nr = get_state_nr_with_situation_v<
+        StatesSet,
+        move_situation_t<get_situation_at_idx_t<Situations, Element::front>>
+    >;
+
+    using type = typename make_transition_impl<Element, state_nr, Situations>::type;
+};
+
+template<typename Element, typename Situations, typename StatesSet>
+using make_transition_t = typename make_transition<Element, Situations, StatesSet>::type;
+
+//////////////////////////////////////////////////////////
+
+template<typename Map, typename Situations, typename StatesSet>
+struct make_transitions
+{};
+
+template<typename... Elements, typename Situations, typename StatesSet>
+struct make_transitions<situation_map<Elements...>, Situations, StatesSet>
+{
+    using type = type_sequence<make_transition_t<Elements, Situations, StatesSet>...>;
+};
+
+template<typename State, typename Set, typename StatesSet>
+using make_transitions_t = typename make_transitions<State, Set, StatesSet>::type;
+
+//////////////////////////////////////////////////////////
+
+template<int I, typename Set, typename Enable = void>
 struct recursive_transitions
 {
+    using current_state = get_state_at_idx_t<Set, I>;
+    using current_transitions = make_transitions_t<
+        typename current_state::map, 
+        typename current_state::situations, 
+        Set
+    >;
+    
+    using new_set = add_states_t<Set, current_transitions>;
     using type = typename recursive_transitions<I + 1, new_set>::type;
 };
 
@@ -1020,8 +1197,8 @@ struct recursive_transitions<I, states_set<States...>, std::enable_if_t<I == siz
     using type = states_set<States...>;
 };
 
-template<typename States>
-using recursive_transitions_t = typename recursive_transitions<0, States>::type;
+template<typename Set>
+using recursive_transitions_t = typename recursive_transitions<0, Set>::type;
 
 //////////////////////////////////////////////////////////
 
@@ -1058,6 +1235,10 @@ class parser;
 
 //////////////////////////////////////////////////////////
 
+constexpr int no_match = -1;
+
+//////////////////////////////////////////////////////////
+
 template<typename First, typename... Rest>
 inline int match(const std::string_view& sv, int x)
 {
@@ -1067,7 +1248,7 @@ inline int match(const std::string_view& sv, int x)
     if constexpr (sizeof...(Rest) > 0)
         return match<Rest...>(sv, x + 1);
     else
-        return -1;
+        return no_match;
 }
 
 //////////////////////////////////////////////////////////
@@ -1091,6 +1272,8 @@ struct has_debug_name : std::false_type
 template <typename T>
 struct has_debug_name<T, std::void_t<decltype(T::debug_name())>> : std::true_type
 {};
+
+//////////////////////////////////////////////////////////
 
 template<int V>
 inline const char* def_debug_name_impl(def<V>, std::true_type)
@@ -1180,6 +1363,13 @@ void dump_state(Stream& s, state<Nr, Situations>)
 {
     s << "STATE " << Nr << std::endl << std::endl;
     dump_situations(s, Situations{});
+    s << std::endl;
+}
+
+template<typename Stream, typename... States>
+void dump_states(Stream& s, states_set<States...>)
+{
+    (void(dump_state(s, States{})), ...);
 }
 
 //////////////////////////////////////////////////////////
@@ -1206,21 +1396,14 @@ public:
     template<typename Stream>
     void dump(Stream& s)
     {
-        dump_state(s, start_state{});
+        dump_states(s, states{});
     }
 
 private:
     using t_set = insert_to_int_set_t<terminal_set_t<S>, end_of_input_v>;
     using nt_set = nonterminal_set_t<S>;
     
-    using start_state = state<
-        0,
-        recursive_closure_t<
-            root_situations_t<
-                closure_t<S, int_set<end_of_input_v>>
-            >
-        >
-    >;
+    using start_state = make_state_t<0, closure_t<S, int_set<end_of_input_v>>>;
 
     using states = recursive_transitions_t<states_set<start_state>>;
     
@@ -1235,20 +1418,70 @@ private:
 
 enum symbols 
 {
-    ex, opt,
-    plus, minus, one 
+    stmt, ex,
+    o_plus, o_minus, o_mul, o_div, o_and, o_or, o_xor, 
+    lpar, rpar, comma,
+    one 
 };
 
 template<>
-struct def<plus>
+struct def<o_plus>
 {
     using type = char_terminal<'+'>;
 };
 
 template<>
-struct def<minus>
+struct def<o_minus>
 {
     using type = char_terminal<'-'>;
+};
+
+template<>
+struct def<o_mul>
+{
+    using type = char_terminal<'*'>;
+};
+
+template<>
+struct def<o_div>
+{
+    using type = char_terminal<'/'>;
+};
+
+template<>
+struct def<o_and>
+{
+    using type = char_terminal<'&'>;
+};
+
+template<>
+struct def<o_or>
+{
+    using type = char_terminal<'|'>;
+};
+
+template<>
+struct def<o_xor>
+{
+    using type = char_terminal<'^'>;
+};
+
+template<>
+struct def<lpar>
+{
+    using type = char_terminal<'('>;
+};
+
+template<>
+struct def<rpar>
+{
+    using type = char_terminal<')'>;
+};
+
+template<>
+struct def<comma>
+{
+    using type = char_terminal<','>;
 };
 
 template<>
@@ -1258,24 +1491,38 @@ struct def<one>
 };
 
 template<>
-struct def<opt>
-{
-    using type = alt<is<>, is<minus>>;
-
-    static const char* debug_name() { return "opt"; }
-};
-
-template<>
 struct def<ex>
 {
-    using type = alt<is<ex, plus, ex>, is<ex, minus, ex>, is<one>>;
+    using type = alt<
+        is<ex, o_plus, ex>, 
+        is<ex, o_minus, ex>, 
+        is<ex, o_mul, ex>,
+        is<ex, o_div, ex>,
+        is<ex, o_and, ex>,
+        is<ex, o_or, ex>,
+        is<ex, o_xor, ex>,
+        is<lpar, ex, rpar>,
+        is<o_minus, ex>,
+        is<one>
+    >;
 
     static const char* debug_name() { return "ex"; }
 };
 
+template<>
+struct def<stmt>
+{
+    using type = alt<
+        is<ex>,
+        is<ex, comma, stmt>
+    >;
+
+    static const char* debug_name() { return "stmt"; }
+};
+
 int main()
 {
-    parser<ex> p;
+    parser<stmt> p;
     p.dump(std::cout);
 
     return 0;
